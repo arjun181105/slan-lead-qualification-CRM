@@ -180,16 +180,8 @@ export default function Dashboard() {
             <div className="val amber">{stats.active}</div>
           </div>
           <div className="stat-cell">
-            <div className="lbl">Calling now</div>
-            <div className="val blue">{stats.calling}</div>
-          </div>
-          <div className="stat-cell">
             <div className="lbl">Won</div>
             <div className="val green">{stats.won}</div>
-          </div>
-          <div className="stat-cell">
-            <div className="lbl">Conversion</div>
-            <div className="val">{stats.conv}<span style={{ fontSize: 18, color: 'var(--muted)' }}>%</span></div>
           </div>
         </div>
 
