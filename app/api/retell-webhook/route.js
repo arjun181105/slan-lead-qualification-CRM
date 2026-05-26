@@ -1,13 +1,57 @@
 import { NextResponse } from 'next/server';
+import crypto from 'crypto';
 import { sql, ensureSchema } from '../../../lib/db';
 import { sendTelnyxSMS, nextRetryAt } from '../../../lib/integrations';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// Verify Retell webhook signature.
+// Format: header is "v={timestamp_ms},d={hex_digest}"
+// digest = HMAC-SHA256(api_key, rawBody + timestamp_ms)
+// Docs: https://docs.retellai.com/features/secure-webhook
+function verifyRetellSignature(rawBody, signatureHeader, secret) {
+  if (!signatureHeader || !secret) return false;
+  // Parse "v=...,d=..." into { v, d }
+  const parts = Object.fromEntries(
+    signatureHeader.split(',').map(p => {
+      const i = p.indexOf('=');
+      return i === -1 ? [p, ''] : [p.slice(0, i).trim(), p.slice(i + 1).trim()];
+    })
+  );
+  const timestamp = parts.v;
+  const provided = parts.d;
+  if (!timestamp || !provided) return false;
+
+  // Reject signatures older than 5 minutes (replay protection)
+  const ts = parseInt(timestamp, 10);
+  if (!Number.isFinite(ts) || Math.abs(Date.now() - ts) > 5 * 60 * 1000) return false;
+
+  const expected = crypto.createHmac('sha256', secret).update(rawBody + timestamp).digest('hex');
+  if (expected.length !== provided.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(provided, 'hex'));
+  } catch {
+    return false;
+  }
+}
+
 export async function POST(req) {
   await ensureSchema();
-  const payload = await req.json().catch(() => ({}));
+  const rawBody = await req.text();
+
+  // Signature verification (skippable in dev via WEBHOOK_VERIFY=0 if needed)
+  const verifyEnabled = process.env.WEBHOOK_VERIFY !== '0';
+  if (verifyEnabled) {
+    const sig = req.headers.get('x-retell-signature');
+    if (!verifyRetellSignature(rawBody, sig, process.env.RETELL_API_KEY)) {
+      console.warn('Rejected webhook with bad/missing signature');
+      return NextResponse.json({ error: 'invalid signature' }, { status: 401 });
+    }
+  }
+
+  let payload;
+  try { payload = JSON.parse(rawBody); } catch { payload = {}; }
 
   // Retell sends events: call_started, call_ended, call_analyzed
   const event = payload.event || payload.type;
@@ -76,14 +120,14 @@ export async function POST(req) {
     newStatus = 'wrong_number';
   } else if (custom.is_dnc === true || outcome === 'not_interested') {
     newStatus = 'not_interested';
-  } else if (outcome === 'booked' || custom.booked_callback === true && outcome !== 'send_link') {
+  } else if (outcome === 'booked' || (custom.booked_callback === true && outcome !== 'send_link')) {
     newStatus = 'hot';
     ivanSms = `🔥 SLAN: ${lead.name} BOOKED a callback. ${custom.loan_purpose_confirmed || lead.loan_purpose || 'finance'}. Amount: ${custom.loan_amount_estimate || 'TBC'}. ${custom.preferred_callback_time ? 'Time: ' + custom.preferred_callback_time + '. ' : ''}Phone: ${lead.phone}. Summary: ${custom.call_summary || 'See CRM.'}`;
   } else if (outcome === 'send_link') {
     newStatus = 'send_link';
     leadSms = `Hi ${lead.name.split(' ')[0]}, it's Alex from SLAN Finance — great chatting just now. Here's where you can grab a time with one of our brokers: https://slanfinance.com.au/contact-slan-finance-caroline-springs/ — or just reply with a time that suits and we'll lock it in. Cheers.`;
     ivanSms = `📤 SLAN: ${lead.name} asked for booking link. ${custom.loan_purpose_confirmed || lead.loan_purpose}. Amount: ${custom.loan_amount_estimate || 'TBC'}. Phone: ${lead.phone}.`;
-  } else if (outcome === 'callback_later' || reason === 'user_hangup' && lead.attempt_count < 3) {
+  } else if (outcome === 'callback_later' || (reason === 'user_hangup' && lead.attempt_count < 3)) {
     newRetry = nextRetryAt(lead.attempt_count);
     if (newRetry) {
       newStatus = 'retry_pending';
@@ -91,8 +135,21 @@ export async function POST(req) {
     } else {
       newStatus = 'dead';
     }
+  } else if (outcome === 'voicemail' || reason === 'voicemail_reached') {
+    // Hit voicemail (real answering machine) or screener — same handling: retry, send SMS
+    if (lead.attempt_count < 3) {
+      newRetry = nextRetryAt(lead.attempt_count);
+      if (newRetry) {
+        newStatus = 'retry_pending';
+        leadSms = `Hi ${lead.name.split(' ')[0]}, Alex from SLAN Finance — tried calling about your ${lead.loan_purpose ? lead.loan_purpose.replace(/_/g, ' ') : 'finance'} enquiry but couldn't get through. Reply here with a good time, or book direct: https://slanfinance.com.au/contact-slan-finance-caroline-springs/`;
+      } else {
+        newStatus = 'dead';
+      }
+    } else {
+      newStatus = 'dead';
+    }
   } else if (!userPickedUp) {
-    // No answer / voicemail / busy / failed
+    // No answer / busy / failed (voicemail handled above)
     if (reason === 'dial_failed' || reason === 'telephony_provider_permission_denied' || reason === 'invalid_destination') {
       newStatus = 'bad_number';
     } else if (lead.attempt_count < 3) {

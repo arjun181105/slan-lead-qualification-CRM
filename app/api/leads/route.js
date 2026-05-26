@@ -6,26 +6,31 @@ import { isAuthed } from '../../../lib/auth';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// CORS for the form domain
-function cors(res) {
-  res.headers.set('Access-Control-Allow-Origin', '*');
+// CORS — allow only the SLAN form domain(s). Set ALLOWED_ORIGINS env to a comma-separated list to extend.
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'https://slan-form.vercel.app').split(',').map(s => s.trim()).filter(Boolean);
+
+function cors(res, req) {
+  const origin = req?.headers?.get?.('origin') || '';
+  const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
+  res.headers.set('Access-Control-Allow-Origin', allowed);
+  res.headers.set('Vary', 'Origin');
   res.headers.set('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.headers.set('Access-Control-Allow-Headers', 'Content-Type,X-API-Key');
   return res;
 }
 
-export async function OPTIONS() {
-  return cors(new NextResponse(null, { status: 204 }));
+export async function OPTIONS(req) {
+  return cors(new NextResponse(null, { status: 204 }), req);
 }
 
 export async function POST(req) {
   await ensureSchema();
   let body;
-  try { body = await req.json(); } catch { return cors(NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })); }
+  try { body = await req.json(); } catch { return cors(NextResponse.json({ error: "Invalid JSON" }, { status: 400 }), req); }
 
   const { name, phone, email, loan_purpose, timeline, source } = body || {};
   if (!name || !phone || !email) {
-    return cors(NextResponse.json({ error: 'name, phone, email required' }, { status: 400 }));
+    return cors(NextResponse.json({ error: "name, phone, email required" }, { status: 400 }), req);
   }
 
   // Insert lead
@@ -61,7 +66,7 @@ export async function POST(req) {
     lead_id: leadId,
     call_id: callId,
     error: callError,
-  }, { status: 201 }));
+  }, { status: 201 }), req);
 }
 
 export async function GET(req) {
