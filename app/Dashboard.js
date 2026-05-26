@@ -124,6 +124,16 @@ export default function Dashboard() {
     if (selected?.id === id) setSelected({ ...selected, status });
   }
 
+  async function deleteLead(id) {
+    const res = await fetch(`/api/leads/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      if (selected?.id === id) setSelected(null);
+      fetchLeads();
+    } else {
+      alert('Delete failed');
+    }
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -268,13 +278,14 @@ export default function Dashboard() {
           lead={selected}
           onClose={() => setSelected(null)}
           onStatusChange={updateLeadStatus}
+          onDelete={deleteLead}
         />
       )}
     </div>
   );
 }
 
-function LeadDrawer({ lead, onClose, onStatusChange }) {
+function LeadDrawer({ lead, onClose, onStatusChange, onDelete }) {
   const c = lead.latest_call || {};
   return (
     <>
@@ -353,7 +364,16 @@ function LeadDrawer({ lead, onClose, onStatusChange }) {
               <button className="btn" onClick={() => onStatusChange(lead.id, 'hot')}>Mark booked</button>
               <button className="btn secondary" onClick={() => onStatusChange(lead.id, 'not_interested')}>Not interested</button>
               <button className="btn secondary" onClick={() => onStatusChange(lead.id, 'dnc')}>DNC</button>
-              <button className="btn secondary" onClick={() => onStatusChange(lead.id, 'new')}>Reset</button>
+              <button
+                className="btn secondary"
+                onClick={() => {
+                  if (!confirm(`Delete ${lead.name}? This permanently removes the lead and all its call records.`)) return;
+                  onDelete(lead.id);
+                }}
+                style={{ marginLeft: 'auto', color: 'var(--red)' }}
+              >
+                Delete
+              </button>
             </div>
           </div>
 
