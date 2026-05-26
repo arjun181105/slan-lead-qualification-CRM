@@ -28,3 +28,14 @@ export async function PATCH(req, { params }) {
   const { rows } = await sql.query(query, values);
   return NextResponse.json({ lead: rows[0] });
 }
+
+// Hard delete a lead and all its call records. Auth-gated.
+export async function DELETE(req, { params }) {
+  if (!(await isAuthed())) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  await ensureSchema();
+  const { id } = await params;
+  // Delete calls first (FK), then the lead row
+  await sql`DELETE FROM calls WHERE lead_id = ${id}`;
+  const { rowCount } = await sql`DELETE FROM leads WHERE id = ${id}`;
+  return NextResponse.json({ ok: true, deleted: rowCount });
+}
