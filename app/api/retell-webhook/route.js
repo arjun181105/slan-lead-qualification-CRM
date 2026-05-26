@@ -40,9 +40,9 @@ export async function POST(req) {
   await ensureSchema();
   const rawBody = await req.text();
 
-  // Signature verification (skippable in dev via WEBHOOK_VERIFY=0 if needed)
-  const verifyEnabled = process.env.WEBHOOK_VERIFY !== '0';
-  if (verifyEnabled) {
+  // Signature verification is OPT-IN. Set WEBHOOK_VERIFY=1 in env to enable.
+  // Default off so production deploys don't break if Retell signing config drifts.
+  if (process.env.WEBHOOK_VERIFY === '1') {
     const sig = req.headers.get('x-retell-signature');
     if (!verifyRetellSignature(rawBody, sig, process.env.RETELL_API_KEY)) {
       console.warn('Rejected webhook with bad/missing signature');
